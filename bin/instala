@@ -1,0 +1,18 @@
+#!/opt/bash/bin/bash
+# Instalador de la xulebra version 0.1 muy cutre y encha antes de salir un viernes
+
+BASE_DIR="/tmp/xulebra"
+
+[ -d $HOME/bin ] || mkdir $HOME/bin
+
+cp -R $BASE_DIR/xulebra $HOME/bin/xulebra
+
+if [ -f $HOME/.bashrc ]; then
+	echo -e "\nalias xulebra='$HOME/bin/xulebra'" >> $HOME/.bashrc
+	source $HOME/.bashrc
+else
+	echo -e "\nalias xulebra='$HOME/bin/xulebra'" >> $HOME/.profile
+	source $HOME/.profile
+fi
+
+echo "Inslacion completada. Para ver la ayuda del programa escribe xulebra -h"
