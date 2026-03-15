@@ -55,6 +55,8 @@ typedef struct {
     int   apple_y;            /* Current apple Y; -1 = not yet placed      */
     int   player_fd[2];       /* Connected socket fds for each player      */
     char  names[2][LOGIN_LEN];/* Login names exchanged at handshake        */
+    int   board_cols;         /* Playable columns (from -W, default 30)    */
+    int   board_rows;         /* Playable rows    (from -H, default 20)    */
 } ServerState;
 
 /*
@@ -65,10 +67,12 @@ static void server_state_init(ServerState *s)
 {
     snake_init(&s->snakes[0]);
     snake_init(&s->snakes[1]);
-    s->apple_x     = -1;
-    s->apple_y     = -1;
+    s->apple_x      = -1;
+    s->apple_y      = -1;
     s->player_fd[0] = -1;
     s->player_fd[1] = -1;
+    s->board_cols   = NET_BOARD_COLS;
+    s->board_rows   = NET_BOARD_ROWS;
     memset(s->names, 0, sizeof(s->names));
 }
 
@@ -119,8 +123,8 @@ static void apple_generate(ServerState *s)
 {
     srandom((unsigned int)time(NULL));
     do {
-        s->apple_x = (int)(random() % NET_BOARD_COLS) + 1;
-        s->apple_y = (int)(random() % NET_BOARD_ROWS) + 1;
+        s->apple_x = (int)(random() % s->board_cols) + 1;
+        s->apple_y = (int)(random() % s->board_rows) + 1;
     } while (snake_contains(&s->snakes[0], s->apple_x, s->apple_y) ||
              snake_contains(&s->snakes[1], s->apple_x, s->apple_y));
 }
@@ -251,11 +255,12 @@ static int check_cross_collisions(const ServerState *s,
  * ═══════════════════════════════════════════════════════════════ */
 
 /*
- * parse_port – scan argv for "-p <port>" and return the port number,
- *              or DEFAULT_PORT if the flag is absent.
- * Returns -1 and prints a diagnostic on any parse error.
+ * parse_args – scan argv for server options.
+ * Fills *port, *cols, *rows with parsed values (or defaults).
+ * Returns 0 on success, -1 on any error.
  */
-static int parse_port(int argc, char *argv[])
+static int parse_args(int argc, char *argv[],
+                      int *port, int *cols, int *rows)
 {
     int i;
     for (i = 1; i < argc; i++) {
@@ -266,22 +271,41 @@ static int parse_port(int argc, char *argv[])
                 fprintf(stderr, "server: -p requires a port number\n");
                 return -1;
             }
-            {
-                int port = atoi(argv[++i]);
-                if (port <= 1024) {
-                    fprintf(stderr,
-                            "server: port must be greater than 1024\n");
-                    return -1;
-                }
-                fprintf(stderr, "server: listening on port %d\n", port);
-                return port;
+            *port = atoi(argv[++i]);
+            if (*port <= 1024) {
+                fprintf(stderr, "server: port must be greater than 1024\n");
+                return -1;
             }
+            fprintf(stderr, "server: listening on port %d\n", *port);
+            break;
+        case 'W':
+            if (i + 1 >= argc) {
+                fprintf(stderr, "server: -W requires a column count\n");
+                return -1;
+            }
+            *cols = atoi(argv[++i]);
+            if (*cols < 10) {
+                fprintf(stderr, "server: board width must be >= 10\n");
+                return -1;
+            }
+            break;
+        case 'H':
+            if (i + 1 >= argc) {
+                fprintf(stderr, "server: -H requires a row count\n");
+                return -1;
+            }
+            *rows = atoi(argv[++i]);
+            if (*rows < 5) {
+                fprintf(stderr, "server: board height must be >= 5\n");
+                return -1;
+            }
+            break;
         default:
             fprintf(stderr, "server: unknown option %s\n", argv[i]);
             return -1;
         }
     }
-    return DEFAULT_PORT;
+    return 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -375,12 +399,16 @@ static void game_loop(ServerState *s)
 void server_run(int argc, char *argv[])
 {
     ServerState state;
-    int         port;
+    int         port      = DEFAULT_PORT;
+    int         board_cols = NET_BOARD_COLS;
+    int         board_rows = NET_BOARD_ROWS;
 
-    port = parse_port(argc, argv);
-    if (port < 0) return;
+    if (parse_args(argc, argv, &port, &board_cols, &board_rows) < 0)
+        return;
 
     server_state_init(&state);
+    state.board_cols = board_cols;
+    state.board_rows = board_rows;
 
     if (accept_players(&state, port) < 0) {
         server_state_cleanup(&state);

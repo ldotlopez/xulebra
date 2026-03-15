@@ -9,32 +9,28 @@
  * Layout
  * ──────
  *  stdscr  : title screen only (before the game starts)
- *  game    : bordered playfield, BOARD_ROWS+2 tall, (BOARD_COLS*2)+2 wide
+ *  game    : bordered playfield, board_rows+2 tall, (board_cols*2)+2 wide
  *            (columns are doubled so the board looks square on a typical
  *             80-column terminal)
  *  info    : sidebar to the right of the board, same height
  *
  * Speed
  * ─────
- * The original used usleep() + blocking getch(), which is unreliable.
  * We use wtimeout(game, ms) so wgetch() returns ERR after the frame
  * interval and the snake keeps moving even when no key is pressed.
  * Speed is in milliseconds; lower = faster.
+ *
+ * Command-line flags (passed after -1)
+ * ─────────────────────────────────────
+ *   -W <cols>   Board width  in cells   (default 30, min 10, max terminal width/2 - 2)
+ *   -H <rows>   Board height in cells   (default 20, min 5,  max terminal height - 4)
+ *   -S <ms>     Initial frame interval  (default 60, min 10, max 500)
  *
  * Apple types  (apple.shape field)
  * ─────────────────────────────────
  *   0   normal apple  – score + grow
  *  +1   speed-up apple – score + grow + faster
  *  -1   slow-down apple – score + grow + slower
- *
- * Bugs fixed from original
- * ────────────────────────
- * • type_of_move checked point_is_in_list(apple) instead of comparing
- *   the future position against the apple position — always returned
- *   "eat" when the apple happened to be anywhere in the snake body.
- * • PAUSE case fell through into NOBUTTON without a break.
- * • sprintf(buf, "%d   \0", v) — the embedded \0 is redundant; removed.
- * • fflush(stdin) is undefined behaviour; removed.
  */
 
 #include <stdlib.h>
@@ -49,19 +45,19 @@
 int score_write(const char *login, int points);
 int score_show(int limit);
 
-/* ── Private constants ──────────────────────────────────────── */
-#define START_X           BOARD_ORIGIN_X
-#define START_Y           BOARD_ORIGIN_Y
-#define SPEED_DEFAULT_MS  60
-#define SPEED_MAX_MS      10
-#define SPEED_STEP_MS     15
+/* ── Limits ─────────────────────────────────────────────────── */
+#define SPEED_MIN_MS      10    /* Fastest allowed frame interval   */
+#define SPEED_MAX_MS     500    /* Slowest allowed frame interval   */
+#define SPEED_STEP_MS     15    /* Change per speed apple           */
+#define BOARD_COLS_MIN    10
+#define BOARD_ROWS_MIN     5
 
 /* Info-window row assignments */
-#define INFO_ROW_PLAYER   1
-#define INFO_ROW_APPLES   3
-#define INFO_ROW_SPEED    4
-#define INFO_ROW_POINTS   5
-#define INFO_ROW_PAUSE    7
+#define INFO_ROW_PLAYER    1
+#define INFO_ROW_APPLES    3
+#define INFO_ROW_SPEED     4
+#define INFO_ROW_POINTS    5
+#define INFO_ROW_PAUSE     7
 
 /* ═══════════════════════════════════════════════════════════════
  * Context object
@@ -69,10 +65,121 @@ int score_show(int limit);
 
 typedef struct {
     Snake   snake;
-    Coord   apple;      /* apple.shape: 0=normal +1=fast -1=slow */
+    Coord   apple;          /* apple.shape: 0=normal +1=fast -1=slow */
+    int     board_cols;     /* Playable columns (runtime, from -W)   */
+    int     board_rows;     /* Playable rows    (runtime, from -H)   */
     WINDOW *game;
     WINDOW *info;
 } GameState;
+
+/* ═══════════════════════════════════════════════════════════════
+ * Argument parsing
+ * ═══════════════════════════════════════════════════════════════ */
+
+/*
+ * parse_args – fill *cols, *rows, *speed_ms from argv.
+ * Outputs are pre-initialised to defaults by the caller before this runs.
+ * Returns 0 on success, -1 on any validation error.
+ */
+static int parse_args(int argc, char *argv[],
+                      int *cols, int *rows, int *speed_ms)
+{
+    int i;
+    for (i = 1; i < argc; i++) {
+        if (argv[i][0] != '-' || argv[i][1] == '\0') {
+            fprintf(stderr, "one_player: unknown argument: %s\n", argv[i]);
+            return -1;
+        }
+        switch (argv[i][1]) {
+        case 'W':
+            if (i + 1 >= argc) {
+                fprintf(stderr, "one_player: -W requires a column count\n");
+                return -1;
+            }
+            *cols = atoi(argv[++i]);
+            if (*cols < BOARD_COLS_MIN) {
+                fprintf(stderr,
+                        "one_player: board width must be >= %d\n",
+                        BOARD_COLS_MIN);
+                return -1;
+            }
+            break;
+        case 'H':
+            if (i + 1 >= argc) {
+                fprintf(stderr, "one_player: -H requires a row count\n");
+                return -1;
+            }
+            *rows = atoi(argv[++i]);
+            if (*rows < BOARD_ROWS_MIN) {
+                fprintf(stderr,
+                        "one_player: board height must be >= %d\n",
+                        BOARD_ROWS_MIN);
+                return -1;
+            }
+            break;
+        case 'S':
+            if (i + 1 >= argc) {
+                fprintf(stderr, "one_player: -S requires a millisecond value\n");
+                return -1;
+            }
+            *speed_ms = atoi(argv[++i]);
+            if (*speed_ms < SPEED_MIN_MS || *speed_ms > SPEED_MAX_MS) {
+                fprintf(stderr,
+                        "one_player: speed must be between %d and %d ms\n",
+                        SPEED_MIN_MS, SPEED_MAX_MS);
+                return -1;
+            }
+            break;
+        default:
+            fprintf(stderr, "one_player: unknown option -%c\n", argv[i][1]);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * Terminal size validation
+ * ═══════════════════════════════════════════════════════════════ */
+
+/*
+ * validate_board_fits – check that the requested board fits the current
+ * terminal.  Must be called after initscr() so LINES/COLS are known.
+ * Adjusts *cols / *rows downward if they exceed the available space,
+ * printing a warning.  Returns -1 if the terminal is too small even
+ * for the minimum board size.
+ */
+static int validate_board_fits(int *cols, int *rows)
+{
+    /* game window needs (board_cols*2)+2 columns and board_rows+2 rows.
+       info sidebar needs at least 18 columns.
+       Total: (board_cols*2) + 2 + 18 columns, board_rows + 2 rows. */
+    int max_cols = (COLS   - 20) / 2;   /* leave 18 cols for info + 2 border */
+    int max_rows =  LINES  -  2;        /* leave 2 rows for border            */
+
+    if (max_cols < BOARD_COLS_MIN || max_rows < BOARD_ROWS_MIN) {
+        fprintf(stderr,
+                "one_player: terminal too small "
+                "(need at least %d x %d)\n",
+                BOARD_COLS_MIN * 2 + 20,
+                BOARD_ROWS_MIN + 2);
+        return -1;
+    }
+
+    if (*cols > max_cols) {
+        fprintf(stderr,
+                "one_player: -W %d exceeds terminal width, clamping to %d\n",
+                *cols, max_cols);
+        *cols = max_cols;
+    }
+    if (*rows > max_rows) {
+        fprintf(stderr,
+                "one_player: -H %d exceeds terminal height, clamping to %d\n",
+                *rows, max_rows);
+        *rows = max_rows;
+    }
+    return 0;
+}
 
 /* ═══════════════════════════════════════════════════════════════
  * Info sidebar
@@ -86,7 +193,13 @@ static void info_init(const GameState *gs)
     mvwaddstr(gs->info, INFO_ROW_PLAYER, 1, "Player:  ");
     mvwaddstr(gs->info, INFO_ROW_PLAYER, 9, name);
     mvwaddstr(gs->info, INFO_ROW_APPLES, 1, "Apples:  0");
-    mvwaddstr(gs->info, INFO_ROW_SPEED,  1, "Speed:   100");
+    mvwaddstr(gs->info, INFO_ROW_SPEED,  1, "Speed:   ");
+    /* Display current speed as a percentage: 100% = slowest (SPEED_MAX_MS) */
+    {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d ms   ", gs->snake.speed);
+        mvwaddstr(gs->info, INFO_ROW_SPEED, 10, buf);
+    }
     mvwaddstr(gs->info, INFO_ROW_POINTS, 1, "Points:  0");
     REFRESH(gs->info);
 }
@@ -96,6 +209,14 @@ static void info_update_row(const GameState *gs, int row, int value)
     char buf[16];
     snprintf(buf, sizeof(buf), "%d    ", value);
     mvwaddstr(gs->info, row, 11, buf);
+    REFRESH(gs->info);
+}
+
+static void info_update_speed(const GameState *gs)
+{
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d ms   ", gs->snake.speed);
+    mvwaddstr(gs->info, INFO_ROW_SPEED, 10, buf);
     REFRESH(gs->info);
 }
 
@@ -111,7 +232,7 @@ static void info_set_pause(const GameState *gs, int paused)
  *
  * Preserves the original discriminant encoding exactly:
  *   discriminant = (old_dir * 100) + ((dx+1) * 10) + (dy+1)
- * where dx/dy are the delta between the new head and the current tail.
+ * where dx/dy are the delta between the new head and the second segment.
  * ═══════════════════════════════════════════════════════════════ */
 
 static char body_char(int old_dir, int dx, int dy)
@@ -135,16 +256,8 @@ static char body_char(int old_dir, int dx, int dy)
 }
 
 /*
- * redraw_second_segment – repaint the node immediately behind the current
- * head with the correct body character reflecting the turn just made.
- *
- * When we prepend a new head and pop the tail, the second node becomes
- * the visual body segment just behind the new head.  We update it before
- * the head moves so we can still read the current head position.
- *
- * The discriminant formula is:   (prev_dir*100) + ((dx+1)*10) + (dy+1)
- * where dx/dy is the delta from the SECOND node to the new head position.
- * This matches the original beauty_char() encoding exactly.
+ * redraw_second_segment – repaint the node immediately behind the head
+ * with the correct corner/straight character before the head advances.
  */
 static void redraw_second_segment(GameState *gs, const Coord *new_head)
 {
@@ -185,8 +298,8 @@ static void place_apple(GameState *gs)
     Coord p;
     srandom((unsigned int)time(NULL));
     do {
-        p.x = (int)(random() % BOARD_COLS) + 1;
-        p.y = (int)(random() % BOARD_ROWS) + 1;
+        p.x = (int)(random() % gs->board_cols) + 1;
+        p.y = (int)(random() % gs->board_rows) + 1;
     } while (snake_contains(&gs->snake, p.x, p.y));
 
     if ((random() % 100) < APPLE_SPAWN_PCT)
@@ -209,7 +322,7 @@ static void place_apple(GameState *gs)
 
 static int classify_move(GameState *gs, int key, Coord *next)
 {
-    *next = gs->snake.head->pos;   /* project forward from the leading segment */
+    *next = gs->snake.head->pos;
     gs->snake.prev_dir = gs->snake.dir;
 
     /* Reject reversal */
@@ -246,8 +359,9 @@ static int classify_move(GameState *gs, int key, Coord *next)
         break;
     }
 
-    if (next->x < 1 || next->x > BOARD_COLS ||
-        next->y < 1 || next->y > BOARD_ROWS)
+    /* Use runtime board dimensions, not compile-time constants */
+    if (next->x < 1 || next->x > gs->board_cols ||
+        next->y < 1 || next->y > gs->board_rows)
         return 2;
 
     if (snake_contains(&gs->snake, next->x, next->y))
@@ -265,14 +379,6 @@ static int classify_move(GameState *gs, int key, Coord *next)
 
 static void move_normal(GameState *gs, const Coord *next)
 {
-    /*
-     * Order matters:
-     * 1. Redraw the second segment (now behind head) with corner/straight
-     *    char – must happen while head still points to the current cell.
-     * 2. Erase the tail cell.
-     * 3. Pop tail, push new head.
-     * 4. Draw the new head character.
-     */
     redraw_second_segment(gs, next);
 
     if (gs->snake.tail)
@@ -284,31 +390,30 @@ static void move_normal(GameState *gs, const Coord *next)
 
     mvwaddch(gs->game, next->y, next->x * 2,
              (chtype)head_char(gs->snake.dir));
-    wmove(gs->game, 0, 0);   /* park cursor away from snake */
+    wmove(gs->game, 0, 0);
 }
 
 static void move_eat_apple(GameState *gs, const Coord *next)
 {
     mvwaddch(gs->game, gs->apple.y, gs->apple.x * 2, 'O');
 
-    /* Grow: add head without removing tail */
     snake_push_head(&gs->snake, next->x, next->y, 0);
     gs->snake.score++;
 
     switch (gs->apple.shape) {
     case 1:
         gs->snake.speed += SPEED_STEP_MS;
-        info_update_row(gs, INFO_ROW_SPEED,
-                        SPEED_DEFAULT_MS - gs->snake.speed + 100);
+        if (gs->snake.speed > SPEED_MAX_MS)
+            gs->snake.speed = SPEED_MAX_MS;
+        info_update_speed(gs);
         wtimeout(gs->game, gs->snake.speed);
         beep();
         break;
     case -1:
         gs->snake.speed -= SPEED_STEP_MS;
-        if (gs->snake.speed < SPEED_MAX_MS)
-            gs->snake.speed = SPEED_MAX_MS;
-        info_update_row(gs, INFO_ROW_SPEED,
-                        SPEED_DEFAULT_MS - gs->snake.speed + 100);
+        if (gs->snake.speed < SPEED_MIN_MS)
+            gs->snake.speed = SPEED_MIN_MS;
+        info_update_speed(gs);
         wtimeout(gs->game, gs->snake.speed);
         beep();
         break;
@@ -317,7 +422,7 @@ static void move_eat_apple(GameState *gs, const Coord *next)
     }
 
     info_update_row(gs, INFO_ROW_APPLES, gs->snake.score);
-    gs->apple.x = -1;   /* signal caller to place a new apple */
+    gs->apple.x = -1;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -379,35 +484,20 @@ static void snake_place_initial(GameState *gs)
 {
     int x;
     /*
-     * The snake starts moving RIGHT so the rightmost segment is the head.
-     * snake_push_tail() appends, so we iterate left-to-right:
-     * first call places the tail (lowest x), last call places the head.
-     * After the loop:
-     *   head -> (START_X + SNAKE_START_LEN - 1, START_Y)  leading cell
-     *   tail -> (START_X,                        START_Y)  trailing cell
-     *
-     * We do NOT use snake_push_head() here because that prepends —
-     * iterating in any order with push_head produces a reversed list.
+     * snake_push_tail() appends; iterating RIGHT-TO-LEFT means the
+     * first push places the head (highest x, leading edge) and the
+     * last push places the tail (lowest x, trailing edge):
+     *   push_tail(3) → [3]           head=(3) tail=(3)
+     *   push_tail(2) → [3]→[2]       head=(3) tail=(2)
+     *   push_tail(1) → [3]→[2]→[1]  head=(3) tail=(1)  ✓
      */
-    /*
-     * snake_push_head() prepends  → head = visual front (newest).
-     * snake_push_tail() appends   → tail = last appended.
-     *
-     * We want: head = rightmost cell (x=3, leading edge moving RIGHT)
-     *          tail = leftmost cell  (x=1, trailing edge)
-     *
-     * Using push_tail and iterating RIGHT-TO-LEFT:
-     *   push_tail(3) → [3]          head=(3) tail=(3)
-     *   push_tail(2) → [3]→[2]      head=(3) tail=(2)
-     *   push_tail(1) → [3]→[2]→[1] head=(3) tail=(1)  ✓
-     */
-    for (x = START_X + SNAKE_START_LEN - 1; x >= START_X; x--)
-        snake_push_tail(&gs->snake, x, START_Y, 0);
+    for (x = BOARD_ORIGIN_X + SNAKE_START_LEN - 1; x >= BOARD_ORIGIN_X; x--)
+        snake_push_tail(&gs->snake, x, BOARD_ORIGIN_Y, 0);
 
     gs->snake.dir        = DIR_RIGHT;
     gs->snake.prev_dir   = DIR_RIGHT;
     gs->snake.score      = 0;
-    gs->snake.speed      = SPEED_DEFAULT_MS;
+    /* speed is already set from parsed args before this is called */
     gs->snake.start_time = (int)time(NULL);
 }
 
@@ -420,11 +510,16 @@ void one_player(int argc, char *argv[])
     GameState gs;
     int       key;
     Coord     next;
-
-    (void)argc; (void)argv;
+    int       init_speed = 60;          /* defaults */
+    int       board_cols = BOARD_COLS;
+    int       board_rows = BOARD_ROWS;
 
     memset(&gs, 0, sizeof(gs));
     snake_init(&gs.snake);
+
+    /* Parse flags before initscr so errors go to a clean terminal */
+    if (parse_args(argc, argv, &board_cols, &board_rows, &init_speed) < 0)
+        return;
 
     /* ncurses setup */
     initscr();
@@ -433,20 +528,31 @@ void one_player(int argc, char *argv[])
     cbreak();
     keypad(stdscr, TRUE);
 
-    show_title();
-    getch();   /* wait for keypress before starting */
+    /* Clamp board to actual terminal size (needs LINES/COLS from initscr) */
+    if (validate_board_fits(&board_cols, &board_rows) < 0) {
+        endwin();
+        return;
+    }
 
-    /* Create sub-windows */
-    gs.game = newwin(BOARD_ROWS + 2, (BOARD_COLS * 2) + 2, 0, 0);
-    gs.info = newwin(BOARD_ROWS + 2,
-                     SCREEN_COLS - (BOARD_COLS * 2) - 2,
-                     0, (BOARD_COLS * 2) + 2);
+    gs.board_cols    = board_cols;
+    gs.board_rows    = board_rows;
+    gs.snake.speed   = init_speed;
+
+    show_title();
+    getch();
+
+    /* Create sub-windows using runtime dimensions */
+    gs.game = newwin(gs.board_rows + 2,
+                     (gs.board_cols * 2) + 2, 0, 0);
+    gs.info = newwin(gs.board_rows + 2,
+                     COLS - (gs.board_cols * 2) - 2,
+                     0, (gs.board_cols * 2) + 2);
 
     if (!gs.game || !gs.info)
         game_over(&gs, "Error creating windows");
 
     keypad(gs.game, TRUE);
-    wtimeout(gs.game, SPEED_DEFAULT_MS);
+    wtimeout(gs.game, gs.snake.speed);
 
     snake_place_initial(&gs);
     draw_borders(&gs);

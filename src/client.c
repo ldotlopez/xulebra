@@ -80,6 +80,9 @@ typedef struct {
     int     apple_x, apple_y;
     int     port;
     char    host[256];
+    int     board_cols;         /* Playable columns (from -W)  */
+    int     board_rows;         /* Playable rows    (from -H)  */
+    int     init_speed;         /* Frame interval ms (from -S) */
     char    packet[PACKET_SIZE];
     WINDOW *game;
     WINDOW *info;
@@ -88,8 +91,11 @@ typedef struct {
 static void client_state_init(ClientState *cs)
 {
     memset(cs, 0, sizeof(*cs));
-    cs->sock   = -1;
-    cs->port   = DEFAULT_PORT;
+    cs->sock        = -1;
+    cs->port        = DEFAULT_PORT;
+    cs->board_cols  = NET_BOARD_COLS;
+    cs->board_rows  = NET_BOARD_ROWS;
+    cs->init_speed  = 60;
     strncpy(cs->host, DEFAULT_HOST, sizeof(cs->host) - 1);
 }
 
@@ -314,8 +320,8 @@ static int classify_move(ClientState *cs, int key, CNode *f)
     default:        f->x++; break;
     }
 
-    if (f->x < 1 || f->x > NET_BOARD_COLS ||
-        f->y < 1 || f->y > NET_BOARD_ROWS)
+    if (f->x < 1 || f->x > cs->board_cols ||
+        f->y < 1 || f->y > cs->board_rows)
         return 1;
 
     if (cs_contains(cs, f->x, f->y))
@@ -412,6 +418,42 @@ static int parse_args(ClientState *cs, int argc, char *argv[])
                 return -1;
             }
             break;
+        case 'W':
+            if (i + 1 < argc) {
+                cs->board_cols = atoi(argv[++i]);
+                if (cs->board_cols < 10) {
+                    fprintf(stderr, "client: board width must be >= 10\n");
+                    return -1;
+                }
+            } else {
+                fprintf(stderr, "client: -W requires a column count\n");
+                return -1;
+            }
+            break;
+        case 'H':
+            if (i + 1 < argc) {
+                cs->board_rows = atoi(argv[++i]);
+                if (cs->board_rows < 5) {
+                    fprintf(stderr, "client: board height must be >= 5\n");
+                    return -1;
+                }
+            } else {
+                fprintf(stderr, "client: -H requires a row count\n");
+                return -1;
+            }
+            break;
+        case 'S':
+            if (i + 1 < argc) {
+                cs->init_speed = atoi(argv[++i]);
+                if (cs->init_speed < 10 || cs->init_speed > 500) {
+                    fprintf(stderr, "client: speed must be 10-500 ms\n");
+                    return -1;
+                }
+            } else {
+                fprintf(stderr, "client: -S requires a millisecond value\n");
+                return -1;
+            }
+            break;
         default:
             fprintf(stderr, "client: unknown option -%c\n", argv[i][1]);
             break;
@@ -442,11 +484,11 @@ void client_run(int argc, char *argv[])
     cbreak();
 
     /* Create windows */
-    cs.game = newwin(NET_BOARD_ROWS + 2,
-                     (NET_BOARD_COLS * 2) + 2, 1, 0);
-    cs.info = newwin(NET_BOARD_ROWS + 2,
-                     NET_SCREEN_COLS - (NET_BOARD_COLS * 2) - 2,
-                     1, (NET_BOARD_COLS * 2) + 2);
+    cs.game = newwin(cs.board_rows + 2,
+                     (cs.board_cols * 2) + 2, 1, 0);
+    cs.info = newwin(cs.board_rows + 2,
+                     COLS - (cs.board_cols * 2) - 2,
+                     1, (cs.board_cols * 2) + 2);
 
     if (!cs.info || !cs.game) {
         endwin();
@@ -480,7 +522,7 @@ void client_run(int argc, char *argv[])
     mvwaddch(cs.game, cs.apple_y, cs.apple_x * 2, '@');
 
     keypad(cs.game, TRUE);
-    wtimeout(cs.game, 100);
+    wtimeout(cs.game, cs.init_speed);
 
     REFRESH(cs.game);
     REFRESH(cs.info);

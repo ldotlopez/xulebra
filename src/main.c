@@ -48,8 +48,16 @@ static void print_help(void)
     puts("  -s          Server mode  (also spawns a local client)");
     puts("  -c          Client mode  (connect to a running server)");
     puts("  -h          Show this help\n");
-    puts("Options (for -s and -c):");
-    puts("  -p <port>   TCP port to use  (default: 2580, must be > 1024)");
+    puts("Options for -1 (single-player):");
+    puts("  -W <cols>   Board width  in cells  (default 30, min 10)");
+    puts("  -H <rows>   Board height in cells  (default 20, min 5)");
+    puts("  -S <ms>     Initial frame interval (default 60, range 10-500)\n");
+    puts("Options for -s and -c (network):");
+    puts("  -p <port>   TCP port to use        (default 2580, must be > 1024)");
+    puts("  -W <cols>   Board width  in cells  (default 30, min 10)");
+    puts("  -H <rows>   Board height in cells  (default 20, min 5)");
+    puts("  -S <ms>     Initial frame interval (default 60, range 10-500)");
+    puts("  -h <host>   Server hostname        (client only, default localhost)");
 }
 
 /* ── Lock-file helpers ──────────────────────────────────────── */
