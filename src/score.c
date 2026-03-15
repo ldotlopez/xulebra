@@ -1,84 +1,134 @@
 /*
- * Score.c
- * Functions for write and show top scores
+ * score.c
+ * Hall-of-Fame: writing and displaying high scores.
+ *
+ * The database is a flat binary file of ScoreRecord structs, kept in
+ * descending order (highest score first).  A simple insertion-sort pass
+ * keeps the file sorted after each new entry is added.
  */
 
-#include "includes.h"
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+
 #include "defines.h"
 #include "structs.h"
 
-/* This write and create a database */
-int write_record ( char *login, int puntos )
+/* ── Internal helpers ───────────────────────────────────────── */
+
+/*
+ * open_or_create_db – open the score database for reading and writing,
+ *                     creating it with appropriate permissions if absent.
+ *
+ * Returns a file descriptor >= 0 on success, -1 on failure.
+ */
+static int open_or_create_db(void)
 {
-    int fd, io_bytes, pos = 0;
-    trecord *rec_1, *rec_2, *rec_w;
+    int fd = open(SCORE_DATABASE, O_RDWR);
+    if (fd >= 0) return fd;
 
-    /* For test only */
-    /* printf("Parameters: [%s] [%d]\n",login,puntos); */
+    /* File does not exist yet – create it */
+    fd = open(SCORE_DATABASE,
+              O_RDWR | O_CREAT,
+              S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    return fd;   /* -1 on failure, valid fd otherwise */
+}
 
-    rec_1 = ( void * ) malloc(sizeof(trecord));
-    rec_2 = ( void * ) malloc(sizeof(trecord));
-    rec_w = ( void * ) malloc(sizeof(trecord));
+/* ── Public API ─────────────────────────────────────────────── */
 
-    /* Obtener el descriptor de fichero */
-    if ( (fd = open( DATABASE ,O_RDWR)) < 0 )
+/*
+ * score_write – insert a new entry and keep the file sorted.
+ *
+ * The function performs one pass of insertion sort: it walks forward
+ * through the file, and whenever the new record outscores the stored one,
+ * the two are swapped.  The new record "bubbles up" to its correct
+ * position, then the original (now displaced) record is written at the
+ * end.
+ *
+ * @login   Player name (at most 8 characters, will be truncated).
+ * @points  Score to record.
+ *
+ * Returns  1 on success, -1 on I/O error.
+ */
+int score_write(const char *login, int points)
+{
+    int         fd;
+    off_t       pos;
+    ScoreRecord incoming, stored, to_write;
+
+    fd = open_or_create_db();
+    if (fd < 0) return -1;
+
+    /* Populate the new entry */
+    memset(&incoming, 0, sizeof(incoming));
+    strncpy(incoming.login, login, sizeof(incoming.login) - 1);
+    incoming.points = points;
+
+    /*
+     * Walk through every existing record.  If `incoming` beats the
+     * record at the current position, swap them so that the higher score
+     * sits earlier in the file.
+     */
+    while (read(fd, &stored, sizeof(ScoreRecord)) == (ssize_t)sizeof(ScoreRecord))
     {
-        if ( (fd = creat( DATABASE ,S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)) == -1 )
-        {
-            return -1 ;
+        /* Rewind to the start of the record we just read */
+        pos = lseek(fd, -(off_t)sizeof(ScoreRecord), SEEK_CUR);
+
+        if (incoming.points > stored.points) {
+            /* incoming wins this slot: write it here, carry `stored` forward */
+            to_write = incoming;
+            incoming = stored;
+        } else {
+            /* stored keeps its slot; re-write it unchanged */
+            to_write = stored;
+        }
+
+        if (write(fd, &to_write, sizeof(ScoreRecord)) != (ssize_t)sizeof(ScoreRecord)) {
+            close(fd);
+            return -1;
         }
     }
 
-    /* Preparar los datos */
-    strncpy(rec_1->login,login,9);
-    rec_1->puntos = puntos;
-
-    /* Buscar mi sitio */
-    while ( read(fd,rec_2,sizeof(trecord)) > 0 )
-    {
-        /* Volver a la posicion actual */
-        pos = lseek(fd,0,SEEK_CUR) - sizeof(trecord);
-        lseek(fd,pos,SEEK_SET);
-
-        /* Comparar los dos registros */
-        if ( rec_1->puntos > rec_2->puntos )
-        {
-            *rec_w = *rec_1;
-            *rec_1 = *rec_2;
-        }
-        else
-        {
-            *rec_w = *rec_2;
-        }
-        write(fd,rec_w,sizeof(trecord));
+    /* Append whatever is left in `incoming` at the end of the file */
+    if (write(fd, &incoming, sizeof(ScoreRecord)) != (ssize_t)sizeof(ScoreRecord)) {
+        close(fd);
+        return -1;
     }
-    /* For test only */
-    /* printf("Write [%s] [%d] at [%d]\n",rec_1->login,rec_1->puntos,lseek(fd,0,SEEK_CUR)); */
-    write(fd,rec_1,sizeof(trecord));
+
     close(fd);
     return 1;
 }
 
-/* Show the database */
-int see_records ( int how_much )
+/*
+ * score_show – print the top-N scores to stdout.
+ *
+ * @limit  Maximum number of entries to display.
+ *
+ * Returns the number of entries printed, or -1 on I/O error.
+ */
+int score_show(int limit)
 {
-    trecord *regi;
-    int fd;
+    int        fd;
+    int        count = 0;
+    ScoreRecord entry;
 
-    regi = ( trecord * ) malloc(sizeof(trecord));
+    fd = open_or_create_db();
+    if (fd < 0) return -1;
 
-    /* Obtener el descriptor de fichero */
-    if ( (fd = open( DATABASE ,O_RDWR)) < 0 )
+    printf("%-10s  %s\n", "Player", "Points");
+    printf("%-10s  %s\n", "----------", "------");
+
+    while (count < limit &&
+           read(fd, &entry, sizeof(ScoreRecord)) == (ssize_t)sizeof(ScoreRecord))
     {
-        if ( (fd = creat( DATABASE ,S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)) == -1 )
-        {
-            return -1 ;
-        }
+        printf("%-10s  %d\n", entry.login, entry.points);
+        count++;
     }
 
-    while ( (how_much--) && (read(fd,regi,sizeof(trecord))) )
-    {
-        printf("* %s: %d Points\n",regi->login,regi->puntos);
-    }
+    close(fd);
+    return count;
 }
-
