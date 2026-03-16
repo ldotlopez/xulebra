@@ -1,11 +1,7 @@
-# Makefile – Xulebra networked snake
-#
-# Targets
-#   all     Build the xulebra binary  (default)
-#   clean   Remove object files and the binary
+# Makefile – Xulebra v0.2
 
 CC      = gcc
-CFLAGS  = -Wall -Wextra -O2 -Iinclude
+CFLAGS  = -Wall -Wextra -std=c99 -O2 -I$(SRCDIR) -D_DEFAULT_SOURCE
 LDFLAGS = -lcurses
 
 BINDIR  = bin

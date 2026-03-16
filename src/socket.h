@@ -51,7 +51,7 @@ static inline int net_connect(const char *host, int port)
 
     he = gethostbyname(host);
     if (he != NULL) {
-        memcpy(&addr.sin_addr, he->h_addr, (size_t)he->h_length);
+        memcpy(&addr.sin_addr, he->h_addr_list[0], (size_t)he->h_length);
     } else {
         addr.sin_addr.s_addr = inet_addr(host);
         if (addr.sin_addr.s_addr == (in_addr_t)(-1)) {

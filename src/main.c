@@ -1,15 +1,13 @@
 /*
  * main.c
- * Entry point for Xulebra – a networked two-player snake game.
+ * Entry point for Xulebra.
  *
- * Usage
- *   xulebra -1        Single-player mode
- *   xulebra -s        Start as server (also launches a local client child)
- *   xulebra -c        Connect as client only
- *   xulebra -h        Print this help
- *
- * Optional flag accepted by -s and -c:
- *   -p <port>         Override the default port (must be > 1024)
+ * Changes from previous version
+ * ──────────────────────────────
+ * • score_seed() called once here so all modules share one PRNG seed.
+ * • signal(SIGPIPE, SIG_IGN) installed early; server also installs it
+ *   but having it in main() protects the client path as well.
+ * • Help text updated for all new flags.
  */
 
 #include <stdio.h>
@@ -22,25 +20,24 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 
-/* Forward declarations for the mode entry points defined elsewhere */
 void one_player(int argc, char *argv[]);
 void server_run(int argc, char *argv[]);
 void client_run(int argc, char *argv[]);
+void score_seed(void);
 
 /* ── Signal handling ────────────────────────────────────────── */
 
 static void handle_sigint(int sig)
 {
-    /* Re-arm: POSIX does not guarantee persistent signal handlers */
     signal(SIGINT, handle_sigint);
-    (void)sig;  /* suppress unused-parameter warning */
+    (void)sig;
 }
 
-/* ── Help text ──────────────────────────────────────────────── */
+/* ── Help ───────────────────────────────────────────────────── */
 
 static void print_help(void)
 {
-    puts("Xulebra  –  two-player networked snake");
+    puts("Xulebra v0.2  –  two-player networked snake");
     puts("Copyright (C) XuZo 2000-2001\n");
     puts("Usage:  xulebra <mode> [options]\n");
     puts("Modes:");
@@ -48,16 +45,26 @@ static void print_help(void)
     puts("  -s          Server mode  (also spawns a local client)");
     puts("  -c          Client mode  (connect to a running server)");
     puts("  -h          Show this help\n");
+
     puts("Options for -1 (single-player):");
-    puts("  -W <cols>   Board width  in cells  (default 30, min 10)");
-    puts("  -H <rows>   Board height in cells  (default 20, min 5)");
-    puts("  -S <ms>     Initial frame interval (default 60, range 10-500)\n");
-    puts("Options for -s and -c (network):");
-    puts("  -p <port>   TCP port to use        (default 2580, must be > 1024)");
-    puts("  -W <cols>   Board width  in cells  (default 30, min 10)");
-    puts("  -H <rows>   Board height in cells  (default 20, min 5)");
-    puts("  -S <ms>     Initial frame interval (default 60, range 10-500)");
-    puts("  -h <host>   Server hostname        (client only, default localhost)");
+    puts("  -W <cols>    Board width        (default 30, min 10)");
+    puts("  -H <rows>    Board height       (default 20, min 5)");
+    puts("  -S <level>   Initial speed 1-10 (default 5; 1=slow 10=fast)");
+    puts("  -L <len>     Initial snake length (default 3, max 20)");
+    puts("  -A <n>       Apples on board at once (default 1, max 9)");
+    puts("  -N <n>       Auto speed-up every N apples (0=off, default 0)");
+    puts("  -T           Wrap-around: exit wall re-enters opposite side");
+    puts("  -b           Enable AI bot opponent (blue snake)");
+    puts("  (in-game)    SPACE = pause   Q / ESC = quit\n");
+
+    puts("Options for -s / -c (network):");
+    puts("  -p <port>    TCP port            (default 2580, must be > 1024)");
+    puts("  -W <cols>    Board width         (default 30, min 10)");
+    puts("  -H <rows>    Board height        (default 20, min 5)");
+    puts("  -S <level>   Initial speed 1-10  (default 5)");
+    puts("  -A <n>       Apples on board     (default 1, max 9)  [-s only]");
+    puts("  -v           Enable spectator slot [-s only]");
+    puts("  -h <host>    Server hostname      (default localhost) [-c only]");
 }
 
 /* ── Lock-file helpers ──────────────────────────────────────── */
@@ -71,8 +78,7 @@ static void lock_path(char *buf, size_t size)
 
 static int lock_create(const char *path)
 {
-    int fd = open(path, O_CREAT | O_EXCL | O_WRONLY,
-                  S_IRUSR | S_IWUSR);
+    int fd = open(path, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR | S_IWUSR);
     if (fd < 0) return -1;
     close(fd);
     return 0;
@@ -81,19 +87,14 @@ static int lock_create(const char *path)
 static void lock_remove(const char *path)
 {
     if (remove(path) != 0)
-        fprintf(stderr, "warning: could not remove lock file %s\n", path);
+        fprintf(stderr, "warning: could not remove lock %s\n", path);
 }
 
 /* ── Argument shifting ──────────────────────────────────────── */
 
-/*
- * drop_first_arg – remove argv[1] (the mode flag) so that sub-functions
- * receive a clean argc/argv starting at their own flags.
- */
 static void drop_first_arg(int *argc, char *argv[])
 {
     int i;
-    /* argv[argc] must remain NULL per the C standard */
     for (i = 1; i < *argc - 1; i++)
         argv[i] = argv[i + 1];
     (*argc)--;
@@ -104,9 +105,9 @@ static void drop_first_arg(int *argc, char *argv[])
 
 int main(int argc, char *argv[])
 {
-    char mode;
-    char lock[256];
-    int  child_status;
+    char  mode;
+    char  lock[256];
+    int   child_status;
     pid_t pid;
 
     if (argc < 2) {
@@ -114,7 +115,6 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    /* Parse the mode flag */
     if (argv[1][0] != '-') {
         fprintf(stderr, "Invalid option: %s\n", argv[1]);
         return EXIT_FAILURE;
@@ -122,19 +122,21 @@ int main(int argc, char *argv[])
 
     mode = argv[1][1];
     switch (mode) {
-    case '1': case 's': case 'c': case 'h':
-        break;
+    case '1': case 's': case 'c': case 'h': break;
     default:
         fprintf(stderr, "Unknown option: -%c\n", argv[1][1]);
         return EXIT_FAILURE;
     }
 
-    /* Remove the mode flag; sub-functions see only their own args */
     drop_first_arg(&argc, argv);
 
-    signal(SIGINT, handle_sigint);
+    /* Seed PRNG once for all modules */
+    score_seed();
 
-    /* ── Dispatch ─────────────────────────────────────────── */
+    /* Ignore SIGPIPE globally; write() returns -1 on broken sockets */
+    signal(SIGPIPE, SIG_IGN);
+    signal(SIGINT,  handle_sigint);
+
     switch (mode) {
 
     case '1':
@@ -143,33 +145,25 @@ int main(int argc, char *argv[])
 
     case 's':
         lock_path(lock, sizeof(lock));
-
-        /* Refuse to start a second server instance */
         if (access(lock, F_OK) == 0) {
-            fprintf(stderr,
-                    "Server is already running  (lock file: %s)\n", lock);
+            fprintf(stderr, "Server already running (lock: %s)\n", lock);
             return EXIT_FAILURE;
         }
-
         if (lock_create(lock) < 0) {
             perror("lock_create");
             return EXIT_FAILURE;
         }
-
         pid = fork();
         if (pid < 0) {
             perror("fork");
             lock_remove(lock);
             return EXIT_FAILURE;
         }
-
         if (pid > 0) {
-            /* ── Parent: run the server ── */
             server_run(argc, argv);
             waitpid(pid, &child_status, 0);
             lock_remove(lock);
         } else {
-            /* ── Child: run a local client ── */
             client_run(argc, argv);
             exit(EXIT_SUCCESS);
         }
