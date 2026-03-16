@@ -20,10 +20,10 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 
-void one_player(int argc, char *argv[]);
-void server_run(int argc, char *argv[]);
-void client_run(int argc, char *argv[]);
-void score_seed(void);
+#include "single.h"
+#include "server.h"
+#include "client.h"
+#include "score.h"
 
 /* ── Signal handling ────────────────────────────────────────── */
 
@@ -140,7 +140,7 @@ int main(int argc, char *argv[])
     switch (mode) {
 
     case '1':
-        one_player(argc, argv);
+        single(argc, argv);
         break;
 
     case 's':

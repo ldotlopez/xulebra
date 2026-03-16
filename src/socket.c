@@ -1,42 +1,21 @@
 /*
- * socket.h
- * Thin wrappers around BSD socket calls for client and server roles.
- *
- * Both functions return a connected/accepted socket file descriptor
- * on success, or a negative error code on failure.
- *
- * Error codes
- *   -1  socket() failed
- *   -2  bind() / gethostbyname() failed
- *   -3  listen() / connect() failed
- *   -4  accept() failed  (server only)
+ * socket.c
+ * TCP socket helpers for the Xulebra network layer.
  */
-
-#ifndef NET_SOCKET_H
-#define NET_SOCKET_H
 
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <stdlib.h>
-#include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
 #include <arpa/inet.h>
 
-/* ── Client ─────────────────────────────────────────────────── */
+#include "socket.h"
 
-/*
- * net_connect – open a TCP connection to host:port.
- *
- * @host  Hostname or dotted-decimal IPv4 address.
- * @port  Port number (host byte order).
- *
- * Returns the socket fd on success, or a negative error code.
- */
-static inline int net_connect(const char *host, int port)
+int net_connect(const char *host, int port)
 {
     struct sockaddr_in addr;
     struct hostent    *he;
@@ -68,20 +47,7 @@ static inline int net_connect(const char *host, int port)
     return sock;
 }
 
-/* ── Server ─────────────────────────────────────────────────── */
-
-/*
- * net_accept_one – bind to port, wait for exactly one incoming connection,
- *                  and return the accepted socket fd.
- *
- * The listening socket is closed before this function returns so that the
- * port is not held open unnecessarily.
- *
- * @port  Port number to listen on (host byte order). Must be > 1023.
- *
- * Returns the accepted socket fd on success, or a negative error code.
- */
-static inline int net_accept_one(int port)
+int net_accept_one(int port)
 {
     struct sockaddr_in addr;
     socklen_t          addr_len;
@@ -91,7 +57,6 @@ static inline int net_accept_one(int port)
     listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd < 0) return -1;
 
-    /* Allow immediate reuse of the port after a restart */
     setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR,
                (const void *)&reuse, sizeof(reuse));
 
@@ -112,11 +77,8 @@ static inline int net_accept_one(int port)
 
     addr_len = sizeof(addr);
     conn_fd  = accept(listen_fd, (struct sockaddr *)&addr, &addr_len);
-
-    close(listen_fd);   /* No longer needed once we have conn_fd */
+    close(listen_fd);
 
     if (conn_fd < 0) return -4;
     return conn_fd;
 }
-
-#endif /* NET_SOCKET_H */

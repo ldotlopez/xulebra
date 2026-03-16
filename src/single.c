@@ -1,5 +1,5 @@
 /*
- * one_player.c
+ * single.c
  * Single-player snake game.
  *
  * Command-line flags
@@ -50,13 +50,10 @@
 #include <curses.h>
 
 #include "defines.h"
-#include "structs.h"
+#include "single.h"
+#include "snake.h"
 #include "colors.h"
-
-/* Forward declarations */
-int score_write(const char *login, int points);
-int score_show(int limit);
-void score_show_ncurses(int limit, int has_color);
+#include "score.h"
 
 /* ── Constants ──────────────────────────────────────────────── */
 #define MAX_APPLES     9
@@ -128,42 +125,42 @@ static int parse_args(int argc, char *argv[], GameState *gs,
     int i;
     for (i = 1; i < argc; i++) {
         if (argv[i][0] != '-' || argv[i][1] == '\0') {
-            fprintf(stderr, "one_player: unknown argument: %s\n", argv[i]);
+            fprintf(stderr, "single: unknown argument: %s\n", argv[i]);
             return -1;
         }
         switch (argv[i][1]) {
         case 'W':
-            if (i+1>=argc){fprintf(stderr,"one_player: -W needs a value\n");return -1;}
+            if (i+1>=argc){fprintf(stderr,"single: -W needs a value\n");return -1;}
             *board_cols = atoi(argv[++i]);
-            if (*board_cols < BOARD_COLS_MIN){fprintf(stderr,"one_player: -W >= %d\n",BOARD_COLS_MIN);return -1;}
+            if (*board_cols < BOARD_COLS_MIN){fprintf(stderr,"single: -W >= %d\n",BOARD_COLS_MIN);return -1;}
             break;
         case 'H':
-            if (i+1>=argc){fprintf(stderr,"one_player: -H needs a value\n");return -1;}
+            if (i+1>=argc){fprintf(stderr,"single: -H needs a value\n");return -1;}
             *board_rows = atoi(argv[++i]);
-            if (*board_rows < BOARD_ROWS_MIN){fprintf(stderr,"one_player: -H >= %d\n",BOARD_ROWS_MIN);return -1;}
+            if (*board_rows < BOARD_ROWS_MIN){fprintf(stderr,"single: -H >= %d\n",BOARD_ROWS_MIN);return -1;}
             break;
         case 'S':
-            if (i+1>=argc){fprintf(stderr,"one_player: -S needs a value\n");return -1;}
+            if (i+1>=argc){fprintf(stderr,"single: -S needs a value\n");return -1;}
             gs->speed_level = atoi(argv[++i]);
             if (gs->speed_level < SPEED_LEVEL_MIN || gs->speed_level > SPEED_LEVEL_MAX){
-                fprintf(stderr,"one_player: -S must be %d-%d\n",SPEED_LEVEL_MIN,SPEED_LEVEL_MAX);return -1;}
+                fprintf(stderr,"single: -S must be %d-%d\n",SPEED_LEVEL_MIN,SPEED_LEVEL_MAX);return -1;}
             break;
         case 'L':
-            if (i+1>=argc){fprintf(stderr,"one_player: -L needs a value\n");return -1;}
+            if (i+1>=argc){fprintf(stderr,"single: -L needs a value\n");return -1;}
             gs->init_len = atoi(argv[++i]);
             if (gs->init_len < SNAKE_LEN_MIN || gs->init_len > SNAKE_LEN_MAX){
-                fprintf(stderr,"one_player: -L must be %d-%d\n",SNAKE_LEN_MIN,SNAKE_LEN_MAX);return -1;}
+                fprintf(stderr,"single: -L must be %d-%d\n",SNAKE_LEN_MIN,SNAKE_LEN_MAX);return -1;}
             break;
         case 'A':
-            if (i+1>=argc){fprintf(stderr,"one_player: -A needs a value\n");return -1;}
+            if (i+1>=argc){fprintf(stderr,"single: -A needs a value\n");return -1;}
             gs->n_apples = atoi(argv[++i]);
             if (gs->n_apples < 1 || gs->n_apples > MAX_APPLES){
-                fprintf(stderr,"one_player: -A must be 1-%d\n",MAX_APPLES);return -1;}
+                fprintf(stderr,"single: -A must be 1-%d\n",MAX_APPLES);return -1;}
             break;
         case 'N':
-            if (i+1>=argc){fprintf(stderr,"one_player: -N needs a value\n");return -1;}
+            if (i+1>=argc){fprintf(stderr,"single: -N needs a value\n");return -1;}
             gs->auto_speed_n = atoi(argv[++i]);
-            if (gs->auto_speed_n < 0){fprintf(stderr,"one_player: -N must be >= 0\n");return -1;}
+            if (gs->auto_speed_n < 0){fprintf(stderr,"single: -N must be >= 0\n");return -1;}
             break;
         case 'T':
             gs->wrap = 1;
@@ -172,7 +169,7 @@ static int parse_args(int argc, char *argv[], GameState *gs,
             gs->bot_enabled = 1;
             break;
         default:
-            fprintf(stderr,"one_player: unknown option -%c\n", argv[i][1]);
+            fprintf(stderr,"single: unknown option -%c\n", argv[i][1]);
             return -1;
         }
     }
@@ -190,12 +187,12 @@ static int validate_board_fits(int *cols, int *rows)
 
     if (max_cols < BOARD_COLS_MIN || max_rows < BOARD_ROWS_MIN) {
         endwin();
-        fprintf(stderr, "one_player: terminal too small (need %dx%d)\n",
+        fprintf(stderr, "single: terminal too small (need %dx%d)\n",
                 BOARD_COLS_MIN*2+20, BOARD_ROWS_MIN+2);
         return -1;
     }
-    if (*cols > max_cols){fprintf(stderr,"one_player: -W clamped to %d\n",max_cols);*cols=max_cols;}
-    if (*rows > max_rows){fprintf(stderr,"one_player: -H clamped to %d\n",max_rows);*rows=max_rows;}
+    if (*cols > max_cols){fprintf(stderr,"single: -W clamped to %d\n",max_cols);*cols=max_cols;}
+    if (*rows > max_rows){fprintf(stderr,"single: -H clamped to %d\n",max_rows);*rows=max_rows;}
     return 0;
 }
 
@@ -920,7 +917,7 @@ static void snake_place_initial(GameState *gs)
  * Public entry point
  * ═══════════════════════════════════════════════════════════════ */
 
-void one_player(int argc, char *argv[])
+void single(int argc, char *argv[])
 {
     GameState gs;
     int       key;
@@ -971,7 +968,7 @@ void one_player(int argc, char *argv[])
 
     if (!gs.game || !gs.info) {
         endwin();
-        fprintf(stderr, "one_player: could not create windows\n");
+        fprintf(stderr, "single: could not create windows\n");
         return;
     }
 

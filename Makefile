@@ -1,35 +1,43 @@
 # Makefile – Xulebra v0.2
+#
+# Targets
+#   all     Build bin/xulebra  (default)
+#   clean   Remove generated files
 
 CC      = gcc
-CFLAGS  = -Wall -Wextra -std=c99 -O2 -I$(SRCDIR) -D_DEFAULT_SOURCE
+CFLAGS  = -Wall -Wextra -std=c99 -O2 -D_DEFAULT_SOURCE -Iinclude
 LDFLAGS = -lcurses
 
-BINDIR  = bin
 SRCDIR  = src
+INCDIR  = include
+OBJDIR  = obj
+BINDIR  = bin
 
-SOURCES = $(SRCDIR)/main.c        \
-          $(SRCDIR)/server.c      \
-          $(SRCDIR)/score.c       \
-          $(SRCDIR)/one_player.c  \
-          $(SRCDIR)/client.c
+SOURCES = $(SRCDIR)/main.c    \
+          $(SRCDIR)/server.c  \
+          $(SRCDIR)/client.c  \
+          $(SRCDIR)/single.c  \
+          $(SRCDIR)/score.c   \
+          $(SRCDIR)/snake.c   \
+          $(SRCDIR)/colors.c  \
+          $(SRCDIR)/socket.c
 
-OBJECTS = $(SOURCES:.c=.o)
+OBJECTS = $(patsubst $(SRCDIR)/%.c, $(OBJDIR)/%.o, $(SOURCES))
 TARGET  = $(BINDIR)/xulebra
 
 .PHONY: all clean
 
-all: $(BINDIR) $(TARGET)
+all: $(BINDIR) $(OBJDIR) $(TARGET)
 
-$(BINDIR):
-	mkdir -p $(BINDIR)
+$(BINDIR) $(OBJDIR):
+	mkdir -p $@
 
 $(TARGET): $(OBJECTS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
-	strip $@
 
-%.o: %.c
+$(OBJDIR)/%.o: $(SRCDIR)/%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
 	rm -f $(OBJECTS) $(TARGET)
-	rmdir --ignore-fail-on-non-empty $(BINDIR) 2>/dev/null || true
+	rmdir --ignore-fail-on-non-empty $(OBJDIR) $(BINDIR) 2>/dev/null || true

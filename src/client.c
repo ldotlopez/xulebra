@@ -21,7 +21,8 @@
 #include <curses.h>
 
 #include "defines.h"
-#include "structs.h"
+#include "client.h"
+#include "snake.h"
 #include "xulnet.h"
 #include "socket.h"
 #include "colors.h"
@@ -134,15 +135,6 @@ static void draw_apple_cell(const ClientState *cs, int y, int x, chtype ch)
     if (cs->has_color) wattroff(cs->game, COLOR_PAIR(CP_APPLE) | A_BOLD);
 }
 
-static void draw_all_apples(const ClientState *cs)
-{
-    int i;
-    for (i = 0; i < cs->n_apples; i++) {
-        if (cs->apple_x[i] >= 0)
-            draw_apple_cell(cs, cs->apple_y[i], cs->apple_x[i], '@');
-    }
-}
-
 /* ═══════════════════════════════════════════════════════════════
  * Info sidebar
  * ═══════════════════════════════════════════════════════════════ */
@@ -163,7 +155,7 @@ static void info_value(const ClientState *cs, int row, int col, const char *s)
 
 static void update_score(ClientState *cs, int ate_player)
 {
-    char buf[8];
+    char buf[12];
     int  scorer = (ate_player == 0) ? cs->player : (1 - cs->player);
     cs->apples[scorer]++;
     snprintf(buf, sizeof(buf), "%d", cs->apples[scorer]);

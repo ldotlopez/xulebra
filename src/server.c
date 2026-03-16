@@ -24,8 +24,9 @@
 
 #include "socket.h"
 #include "xulnet.h"
-#include "structs.h"
+#include "snake.h"
 #include "defines.h"
+#include "server.h"
 
 /* ── Multi-apple cap ────────────────────────────────────────── */
 #define MAX_APPLES  9

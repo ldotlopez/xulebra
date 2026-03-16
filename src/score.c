@@ -24,7 +24,8 @@
 #include <curses.h>
 
 #include "defines.h"
-#include "structs.h"
+#include "snake.h"
+#include "score.h"
 #include "colors.h"
 
 /* ── Internal helpers ───────────────────────────────────────── */
